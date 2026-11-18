@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+    <meta charset="UTF-8">
+    <title>Obiteljsko stablo</title>
+    <link rel="stylesheet" href="/static/family-chart.css">
+    <script src="/static/d3.min.js"></script>
+    <script src="/static/family-chart.min.js"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #1e1e24;
+        }
+        #FamilyChart {
+            width: 100%;
+            height: 100vh;
+        }
+        .f3-form-cont {
+            background-color: #2b2b36;
+            color: #ffffff;
+        }
+        .f3-form-cont label,
+        .f3-form-cont h3,
+        .f3-radio-group {
+            color: #e0e0e0;
+        }
+        #ModeSwitch {
+            position: fixed;
+            top: 14px;
+            left: 14px;
+            z-index: 1000;
+            background: #3b82f6;
+            color: #ffffff;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-family: sans-serif;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        }
+        #ModeSwitch:hover {
+            background: #2563eb;
+        }
+        #FullNetwork {
+            display: none;
+            width: 100%;
+            height: 100vh;
+            background-color: #1e1e24;
+        }
+
+    </style>
+</head>
+<body>
+    <button id="ModeSwitch">Prikaži cijelu mrežu (svi srodnici)</button>
+    <div id="FullNetwork"></div>
+
+    <div id="FamilyChart" class="f3"></div>
+
+    <script>
+        fetch('/api/tree')
+            .then(odgovor => odgovor.json())
+            .then(podaci => {
+                if (podaci.length === 0) {
+                    podaci = [{
+                        "id": "1",
+                        "data": { "first name": "Početna", "last name": "Osoba", "gender": "M" },
+                        "rels": { "parents": [], "spouses": [], "children": [] }
+                    }];
+                }
+
+                const chart = f3.createChart('#FamilyChart', podaci);
+                // 1. Spremamo referencu na karticu u varijablu f3Card
+                const f3Card = chart.setCardHtml()
+                    .setCardDisplay([["first name", "last name"], ["birth year", "death year"]]);
+
+                // 2. Uključujemo bočni panel za uređivanje i biramo polja u formi
+                const f3EditTree = chart.editTree()
+                    .fixed(true)
+                    .setFields(["first name", "last name", "birth year", "death year"])
+                    .setEditFirst(true);
+                f3EditTree.setEdit();
+                f3EditTree.setOnChange(() => {
+                    const azuriraniPodaci = f3EditTree.exportData();
+                    fetch('/api/tree/sync', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(azuriraniPodaci)
+                    })
+                    .then(odgovor => odgovor.json())
+                    .then(rezultat => console.log("Spremljeno u bazu:", rezultat))
+                    .catch(greska => console.error("Greška pri spremanju:", greska));
+                });
+
+
+                // 3. Povezujemo klik na karticu tako da otvori formu za tu osobu
+                let trenutnoOtvorenaOsoba = null;
+
+                f3Card.setOnCardClick((e, d) => {
+                    trenutnoOtvorenaOsoba = d.data;
+                    f3EditTree.open(d);
+                    f3Card.onCardClickDefault(e, d);
+                });
+
+                document.addEventListener('click', (e) => {
+                    const btn = e.target.closest('button');
+                    if (!btn) return;
+
+                    const jeDeleteGumb = btn.classList.contains('f3-delete-btn') || btn.textContent.trim().toLowerCase() === 'delete';
+                    if (jeDeleteGumb && btn.closest('.f3-form-cont') && trenutnoOtvorenaOsoba) {
+                        const punoIme = `${trenutnoOtvorenaOsoba.data["first name"] || ""} ${trenutnoOtvorenaOsoba.data["last name"] || ""}`.trim();
+                        const djecaIds = trenutnoOtvorenaOsoba.rels?.children || [];
+
+                        let poruka = `Sigurno želite obrisati osobu: ${punoIme}?`;
+
+                        if (djecaIds.length > 0) {
+                            const svoStablo = f3EditTree.exportData();
+                            const imenaDjece = djecaIds.map(cid => {
+                                const dijete = svoStablo.find(p => p.id === cid);
+                                return dijete ? `${dijete.data["first name"]} ${dijete.data["last name"]}`.trim() : cid;
+                            });
+                            poruka += `\n\nNapomena: Ova osoba ima djecu (${imenaDjece.join(', ')}) koja će ostati bez ovog roditelja.`;
+                        }
+
+                        if (!confirm(poruka)) {
+                            e.stopImmediatePropagation();
+                            e.preventDefault();
+                        }
+                    }
+                }, true);
+
+                chart.updateTree({ initial: true });
+
+            })
+            .catch(greska => console.error("Greška pri dohvaćanju stabla:", greska));
+        let cijelaMrezaAktivna = false;
+        const btnSwitch = document.getElementById('ModeSwitch');
+        const divEditor = document.getElementById('FamilyChart');
+        const divFull = document.getElementById('FullNetwork');
+
+        btnSwitch.addEventListener('click', () => {
+            cijelaMrezaAktivna = !cijelaMrezaAktivna;
+            if (cijelaMrezaAktivna) {
+                divEditor.style.display = 'none';
+                divFull.style.display = 'block';
+                btnSwitch.textContent = 'Natrag na Editor (dodavanje/uređivanje)';
+                nacrtajCijeluMrezu();
+            } else {
+                divFull.style.display = 'none';
+                divEditor.style.display = 'block';
+                btnSwitch.textContent = 'Prikaži cijelu mrežu (svi srodnici)';
+                location.reload();
+            }
+        });
+
+        function nacrtajCijeluMrezu() {
+            fetch('/api/full-tree')
+                .then(r => r.json())
+                .then(data => {
+                    const persons = data.persons;
+                    const partnerships = data.partnerships;
+                    divFull.innerHTML = '';
+
+                    if (!persons.length) return;
+
+                    // Dimenzije kartica i razmaci
+                    const cardW = 160, cardH = 64, gapX = 36, partnerGap = 16, rowH = 150;
+
+                    // Grupiranje osoba po generacijama
+                    const byGen = {};
+                    persons.forEach(p => {
+                        const g = p.generation;
+                        if (!byGen[g]) byGen[g] = [];
+                        byGen[g].push(p);
+                    });
+
+                    // Mapa partnera kako bismo parove smjestili jedne pokraj drugih
+                    const partnerMap = {};
+                    partnerships.forEach(pt => {
+                        if (!partnerMap[pt.person1_id]) partnerMap[pt.person1_id] = [];
+                        if (!partnerMap[pt.person2_id]) partnerMap[pt.person2_id] = [];
+                        partnerMap[pt.person1_id].push(pt.person2_id);
+                        partnerMap[pt.person2_id].push(pt.person1_id);
+                    });
+
+                    // Računanje X i Y koordinata za svaku osobu
+                    const pos = {};
+                    const gens = Object.keys(byGen).map(Number).sort((a, b) => a - b);
+
+                    gens.forEach(g => {
+                        const rowPersons = byGen[g];
+                        // Sortiraj po prezimenu pa po godini rođenja
+                        rowPersons.sort((a, b) => {
+                            const parX = (p) => {
+                                const f = p.father_id && pos[p.father_id] ? pos[p.father_id].x : null;
+                                const m = p.mother_id && pos[p.mother_id] ? pos[p.mother_id].x : null;
+                                if (f !== null && m !== null) return (f + m) / 2;
+                                return f !== null ? f : (m !== null ? m : 999999);
+                            };
+                            return parX(a) - parX(b) || (a.birth_year || 9999) - (b.birth_year || 9999);
+                        });
+
+                        const ordered = [];
+                        const visited = new Set();
+                        rowPersons.forEach(p => {
+                            if (visited.has(p.id)) return;
+                            visited.add(p.id);
+                            ordered.push({ person: p, isPartner: false });
+                            (partnerMap[p.id] || []).forEach(pid => {
+                                const partnerObj = rowPersons.find(x => x.id === pid);
+                                if (partnerObj && !visited.has(partnerObj.id)) {
+                                    visited.add(partnerObj.id);
+                                    ordered.push({ person: partnerObj, isPartner: true });
+                                }
+                            });
+                        });
+
+                        let curX = 0;
+                        ordered.forEach((item, idx) => {
+                            if (idx > 0) {
+                                curX += item.isPartner ? (cardW + partnerGap) : (cardW + gapX);
+                            }
+                            pos[item.person.id] = {
+                                x: curX,
+                                y: g * rowH,
+                                person: item.person
+                            };
+                        });
+
+                        // Centriraj svaki red oko X = 0
+                        const rowWidth = curX + cardW;
+                        ordered.forEach(item => {
+                            pos[item.person.id].x -= rowWidth / 2;
+                        });
+                    });
+
+                    // Kreiranje SVG platna sa zoom/pan podrškom
+                    const width = divFull.clientWidth;
+                    const height = divFull.clientHeight;
+                    const svg = d3.select('#FullNetwork').append('svg')
+                        .attr('width', width)
+                        .attr('height', height);
+
+                    const gMain = svg.append('g');
+
+                    const zoom = d3.zoom()
+                        .scaleExtent([0.1, 2.5])
+                        .on('zoom', (event) => gMain.attr('transform', event.transform));
+
+                    svg.call(zoom);
+                    svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, 80).scale(0.85));
+
+                    // 1. Crtanje linija braka/partnerstva
+                    partnerships.forEach(pt => {
+                        const a = pos[pt.person1_id];
+                        const b = pos[pt.person2_id];
+                        if (!a || !b) return;
+                        gMain.append('line')
+                            .attr('x1', a.x + cardW / 2)
+                            .attr('y1', a.y + cardH / 2)
+                            .attr('x2', b.x + cardW / 2)
+                            .attr('y2', b.y + cardH / 2)
+                            .attr('stroke', '#f59e0b')
+                            .attr('stroke-width', 2.5);
+                    });
+
+                    // 2. Crtanje linija roditelj -> dijete (svaka obitelj ima svoj jedinstveni pomak visine)
+                    const obitelji = {};
+                    persons.forEach(child => {
+                        if (!child.father_id && !child.mother_id) return;
+                        const kljuc = `${child.father_id || 'none'}_${child.mother_id || 'none'}`;
+                        if (!obitelji[kljuc]) {
+                            obitelji[kljuc] = {
+                                father_id: child.father_id,
+                                mother_id: child.mother_id,
+                                children: []
+                            };
+                        }
+                        obitelji[kljuc].children.push(child);
+                    });
+
+                    Object.values(obitelji).forEach((ob, idx) => {
+                        const fPos = ob.father_id ? pos[ob.father_id] : null;
+                        const mPos = ob.mother_id ? pos[ob.mother_id] : null;
+                        if (!fPos && !mPos) return;
+
+                        let startX, startY;
+                        if (fPos && mPos) {
+                            startX = (fPos.x + mPos.x + cardW) / 2;
+                            startY = fPos.y + cardH / 2;
+                        } else {
+                            const single = fPos || mPos;
+                            startX = single.x + cardW / 2;
+                            startY = single.y + cardH;
+                        }
+
+                        // Svaka obitelj dobiva vlastiti jedinstveni razmak grane (da se linije rođaka nikad ne spoje!)
+                        const jedinsveniPomak = 22 + (idx % 6) * 8;
+                        const grananjeY = (fPos || mPos).y + cardH + jedinsveniPomak;
+
+                        // Okomita crta od roditelja do njihove vlastite horizontalne sabirnice
+                        gMain.append('line')
+                            .attr('x1', startX).attr('y1', startY)
+                            .attr('x2', startX).attr('y2', grananjeY)
+                            .attr('stroke', '#94a3b8').attr('stroke-width', 1.5);
+
+                        // Raspon X koordinata njihove djece (i samog roditelja)
+                        const sveX = [startX];
+                        ob.children.forEach(c => {
+                            if (pos[c.id]) sveX.push(pos[c.id].x + cardW / 2);
+                        });
+                        const minX = Math.min(...sveX);
+                        const maxX = Math.max(...sveX);
+
+                        // Horizontalna crta samo iznad djece te obitelji
+                        gMain.append('line')
+                            .attr('x1', minX).attr('y1', grananjeY)
+                            .attr('x2', maxX).attr('y2', grananjeY)
+                            .attr('stroke', '#94a3b8').attr('stroke-width', 1.5);
+
+                        // Okomite crte prema svakom djetetu te obitelji
+                        ob.children.forEach(c => {
+                            const cPos = pos[c.id];
+                            if (!cPos) return;
+                            const endX = cPos.x + cardW / 2;
+                            gMain.append('line')
+                                .attr('x1', endX).attr('y1', grananjeY)
+                                .attr('x2', endX).attr('y2', cPos.y)
+                                .attr('stroke', '#94a3b8').attr('stroke-width', 1.5);
+                        });
+                    });
+
+
+                    // 3. Crtanje kartica osoba
+                    const cards = gMain.selectAll('.person-card')
+                        .data(persons)
+                        .enter()
+                        .append('g')
+                        .attr('transform', d => `translate(${pos[d.id].x}, ${pos[d.id].y})`);
+
+                    cards.append('rect')
+                        .attr('width', cardW)
+                        .attr('height', cardH)
+                        .attr('rx', 8)
+                        .attr('fill', d => d.gender === 'F' ? '#3b2434' : '#1e2f44')
+                        .attr('stroke', d => d.gender === 'F' ? '#ec4899' : '#3b82f6')
+                        .attr('stroke-width', 2);
+
+                    cards.append('text')
+                        .attr('x', cardW / 2)
+                        .attr('y', 26)
+                        .attr('text-anchor', 'middle')
+                        .attr('fill', '#ffffff')
+                        .attr('font-family', 'sans-serif')
+                        .attr('font-size', '13px')
+                        .attr('font-weight', 'bold')
+                        .text(d => `${d.first_name} ${d.last_name || ''}`.trim());
+
+                    cards.append('text')
+                        .attr('x', cardW / 2)
+                        .attr('y', 46)
+                        .attr('text-anchor', 'middle')
+                        .attr('fill', '#cbd5e1')
+                        .attr('font-family', 'sans-serif')
+                        .attr('font-size', '11px')
+                        .text(d => {
+                            if (!d.birth_year && !d.death_year) return '';
+                            return `${d.birth_year || '?'} – ${d.death_year || ''}`;
+                        });
+                });
+        }
+
+    </script>
+</body>
+</html>
