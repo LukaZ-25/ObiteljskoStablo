@@ -6,10 +6,6 @@
 
 Program za grafički prikaz obiteljskog stabla kroz više generacija i koljena. Postavi se program, dvoklik na .exe pa se otvori konzola i u browseru stranica. Kad je gotovo korištenje onda se ugasi stranica u browseru te konzola.
 
-## Kako se postavlja
-
-Niz koraka: 1., 2., ..., i koje tehnologije i naredbe treba koristiti
-
 ## Koje tehnologije su korištene
 
 | Dio sustava | Tehnologija | Uloga u projektu |
