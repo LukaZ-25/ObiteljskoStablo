@@ -6,6 +6,17 @@
 
 Program za grafički prikaz obiteljskog stabla kroz više generacija i koljena. Postavi se program, dvoklik na .exe pa se otvori konzola i u browseru stranica. Kad je gotovo korištenje onda se ugasi stranica u browseru te konzola.
 
+## Prikaz rada aplikacije
+
+### Uređivanje svih članova/cijelog obiteljskog stabla
+<img src="app-preview/editing_fokusiran.png" alt="Uređivanje svih članova" width="100%">
+
+### Uređivanje jednog člana
+<img src="app-preview/editing_svi.png" alt="Uređivanje jednog člana" width="100%">
+
+### Prikaz cijele mreže (svi srodnici i partneri)
+<img src="app-preview/prikaz.png" alt="Prikaz cijele mreže" width="100%">
+
 ## Koje tehnologije su korištene
 
 | Dio sustava | Tehnologija | Uloga u projektu |
