@@ -187,55 +187,136 @@
                         partnerMap[pt.person2_id].push(pt.person1_id);
                     });
 
-                    // Računanje X i Y koordinata za svaku osobu
+                    // Računanje X i Y koordinata po principu podstabala (kao u editoru, bez preklapanja)
                     const pos = {};
-                    const gens = Object.keys(byGen).map(Number).sort((a, b) => a - b);
-
-                    gens.forEach(g => {
-                        const rowPersons = byGen[g];
-                        // Sortiraj po prezimenu pa po godini rođenja
-                        rowPersons.sort((a, b) => {
-                            const parX = (p) => {
-                                const f = p.father_id && pos[p.father_id] ? pos[p.father_id].x : null;
-                                const m = p.mother_id && pos[p.mother_id] ? pos[p.mother_id].x : null;
-                                if (f !== null && m !== null) return (f + m) / 2;
-                                return f !== null ? f : (m !== null ? m : 999999);
-                            };
-                            return parX(a) - parX(b) || (a.birth_year || 9999) - (b.birth_year || 9999);
+                    const personMap = {};
+                    persons.forEach(p => personMap[p.id] = p);
+                    
+                    // Grupiramo djecu po paru roditelja (ili samohranom roditelju)
+                    const childrenByParentKey = {};
+                    persons.forEach(p => {
+                        if (p.father_id || p.mother_id) {
+                            const key = `${p.father_id || ''}_${p.mother_id || ''}`;
+                            if (!childrenByParentKey[key]) childrenByParentKey[key] = [];
+                            childrenByParentKey[key].push(p);
+                        }
+                    });
+                    
+                    const placed = new Set();
+                    
+                    // Pomoćna funkcija: vraća par (ili samca) kao jednu obiteljsku jedinicu
+                    function getUnit(p) {
+                        const partners = (partnerMap[p.id] || [])
+                            .map(id => personMap[id])
+                            .filter(x => x && !placed.has(x.id));
+                        return [p, ...partners];
+                    }
+                    
+                    // Rekurzivno mjeri širinu cijele grane ispod neke osobe/para
+                    function measureUnit(p, visitedMeasure) {
+                        const unit = getUnit(p).filter(u => !visitedMeasure.has(u.id));
+                        unit.forEach(u => visitedMeasure.add(u.id));
+                    
+                        const unitW = unit.length * cardW + (unit.length - 1) * partnerGap;
+                    
+                        // Pronađi svu djecu članova ove jedinice
+                        const kids = [];
+                        persons.forEach(child => {
+                            if (visitedMeasure.has(child.id)) return;
+                            const isChild = unit.some(u => child.father_id === u.id || child.mother_id === u.id);
+                            if (isChild) kids.push(child);
                         });
-
-                        const ordered = [];
-                        const visited = new Set();
-                        rowPersons.forEach(p => {
-                            if (visited.has(p.id)) return;
-                            visited.add(p.id);
-                            ordered.push({ person: p, isPartner: false });
-                            (partnerMap[p.id] || []).forEach(pid => {
-                                const partnerObj = rowPersons.find(x => x.id === pid);
-                                if (partnerObj && !visited.has(partnerObj.id)) {
-                                    visited.add(partnerObj.id);
-                                    ordered.push({ person: partnerObj, isPartner: true });
-                                }
-                            });
-                        });
-
-                        let curX = 0;
-                        ordered.forEach((item, idx) => {
-                            if (idx > 0) {
-                                curX += item.isPartner ? (cardW + partnerGap) : (cardW + gapX);
+                    
+                        kids.sort((a, b) => (a.birth_year || 9999) - (b.birth_year || 9999));
+                    
+                        if (kids.length === 0) {
+                            return { unit, kids: [], width: unitW };
+                        }
+                    
+                        const kidTrees = [];
+                        let kidsTotalW = 0;
+                        kids.forEach(k => {
+                            if (!visitedMeasure.has(k.id)) {
+                                const kt = measureUnit(k, visitedMeasure);
+                                kidTrees.push(kt);
+                                kidsTotalW += kt.width;
                             }
-                            pos[item.person.id] = {
-                                x: curX,
-                                y: g * rowH,
-                                person: item.person
-                            };
                         });
-
-                        // Centriraj svaki red oko X = 0
-                        const rowWidth = curX + cardW;
-                        ordered.forEach(item => {
-                            pos[item.person.id].x -= rowWidth / 2;
+                        if (kidTrees.length > 1) {
+                            kidsTotalW += (kidTrees.length - 1) * gapX;
+                        }
+                    
+                        return {
+                            unit,
+                            kids: kidTrees,
+                            width: Math.max(unitW, kidsTotalW)
+                        };
+                    }
+                    
+                    // Postavlja X i Y koordinate: roditelji idu točno iznad sredine svoje djece
+                    function layoutTree(tree, leftX) {
+                        const unitW = tree.unit.length * cardW + (tree.unit.length - 1) * partnerGap;
+                    
+                        if (tree.kids.length === 0) {
+                            let cx = leftX + (tree.width - unitW) / 2;
+                            tree.unit.forEach(u => {
+                                pos[u.id] = { x: cx, y: u.generation * rowH, person: u };
+                                placed.add(u.id);
+                                cx += cardW + partnerGap;
+                            });
+                            return;
+                        }
+                    
+                        // Prvo postavimo svu djecu unutar dodijeljene širine
+                        let kidsTotalW = tree.kids.reduce((sum, kt) => sum + kt.width, 0) + (tree.kids.length - 1) * gapX;
+                        let kidStartX = leftX + (tree.width - kidsTotalW) / 2;
+                    
+                        tree.kids.forEach(kt => {
+                            layoutTree(kt, kidStartX);
+                            kidStartX += kt.width + gapX;
                         });
+                    
+                        // Sredina djece određuje točnu poziciju roditelja (jedinac = ravno okomito dolje!)
+                        const firstKidUnit = tree.kids[0].unit;
+                        const lastKidUnit = tree.kids[tree.kids.length - 1].unit;
+                        const firstKidX = pos[firstKidUnit[0].id].x;
+                        const lastKidLastMember = lastKidUnit[lastKidUnit.length - 1];
+                        const lastKidRightX = pos[lastKidLastMember.id].x + cardW;
+                        const kidsCenterX = (firstKidX + lastKidRightX) / 2;
+                    
+                        let parentStartX = kidsCenterX - unitW / 2;
+                        tree.unit.forEach(u => {
+                            pos[u.id] = { x: parentStartX, y: u.generation * rowH, person: u };
+                            placed.add(u.id);
+                            parentStartX += cardW + partnerGap;
+                        });
+                    }
+                    
+                    // Krećemo od osoba iz najstarije generacije (koje nemaju roditelje u bazi)
+                    const roots = persons
+                        .filter(p => !p.father_id && !p.mother_id)
+                        .sort((a, b) => a.generation - b.generation || (a.birth_year || 9999) - (b.birth_year || 9999));
+                    
+                    const visitedMeasure = new Set();
+                    const forest = [];
+                    roots.forEach(r => {
+                        if (!visitedMeasure.has(r.id)) {
+                            forest.push(measureUnit(r, visitedMeasure));
+                        }
+                    });
+                    
+                    // Za svaki slučaj ako je ostao neki nepovezani čvor
+                    persons.forEach(p => {
+                        if (!visitedMeasure.has(p.id)) {
+                            forest.push(measureUnit(p, visitedMeasure));
+                        }
+                    });
+                    
+                    let totalForestW = forest.reduce((s, t) => s + t.width, 0) + Math.max(0, forest.length - 1) * (gapX * 1.5);
+                    let currentForestX = -totalForestW / 2;
+                    forest.forEach(tree => {
+                        layoutTree(tree, currentForestX);
+                        currentForestX += tree.width + gapX * 1.5;
                     });
 
                     // Kreiranje SVG platna sa zoom/pan podrškom
