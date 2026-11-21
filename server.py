@@ -7,6 +7,9 @@ import webbrowser
 import sqlite3
 from flask import Flask, request, jsonify, render_template
 from collections import deque
+from flask import Response
+from pdf_export import generate_tree_pdf
+
 
 if getattr(sys, "frozen", False):
     # Kada radi kao zapakirani .exe (PyInstaller)
@@ -359,6 +362,18 @@ def get_full_tree():
         p["generation"] = generation[p["id"]] - min_gen
 
     return jsonify({"persons": persons, "partnerships": partnerships})
+
+
+@app.route("/api/export/pdf", methods=["GET"])
+def export_pdf():
+    # Pozivamo već postojeću get_full_tree() logiku da dobijemo osobe i partnerstva
+    tree_data = get_full_tree().get_json()
+    pdf_bytes = generate_tree_pdf(tree_data)
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=ObiteljskoStablo.pdf"},
+    )
 
 
 def find_free_port():
